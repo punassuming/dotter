@@ -35,6 +35,17 @@ Alternatively, Dotter is on [crates.io](https://crates.io/crates/dotter), so if 
 Check out [the wiki](https://github.com/SuperCuber/dotter/wiki) for more information.
 Among other things, it explains how to setup and configure Dotter, as well as giving insight on how the templating and deployment works.
 
+# Ignoring entries in directory mappings
+
+Recursive symbolic directory mappings can exclude entries by basename using glob patterns. Patterns are checked at every depth, and matching directories are skipped without traversing them:
+
+```toml
+[pwsh.files]
+pwsh = { target = "~/Documents/PowerShell", type = "symbolic", ignore = [".git", "*.tmp"] }
+```
+
+This keeps Git metadata such as `.git` directories out of the deployed file links while continuing to deploy the other files in the package.
+
 # Usage
 Now that you've configured all the global and local file sections, you can simply run `dotter` from within your repository.\
 All the files will be deployed to their target locations.

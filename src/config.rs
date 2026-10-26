@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::filesystem;
@@ -30,6 +31,8 @@ pub struct SymbolicTarget {
     pub target: PathBuf,
     pub owner: Option<UnixUser>,
     pub recurse: Option<bool>,
+    #[serde(default)]
+    pub ignore: Vec<String>,
     #[serde(rename = "if")]
     pub condition: Option<String>,
 }
@@ -485,6 +488,7 @@ impl<T: Into<PathBuf>> From<T> for SymbolicTarget {
             owner: None,
             condition: None,
             recurse: None,
+            ignore: Vec::new(),
         }
     }
 }
@@ -531,16 +535,44 @@ fn expand_directories(config: &Configuration) -> Result<Files> {
         .files
         .iter()
         .map(|(source, target)| {
-            expand_directory(source, target, config).context(format!("expand file {source:?}"))
+            let ignore = build_ignore_set(source, target)?;
+            expand_directory(source, target, config, &ignore)
+                .context(format!("expand file {source:?}"))
         })
         .collect::<Result<Vec<Files>>>()?;
     Ok(expanded.into_iter().flatten().collect::<Files>())
 }
 
+fn build_ignore_set(source: &Path, target: &FileTarget) -> Result<GlobSet> {
+    let patterns = match target {
+        FileTarget::Symbolic(target) => &target.ignore,
+        _ => {
+            return GlobSetBuilder::new()
+                .build()
+                .context("build empty ignore set")
+        }
+    };
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(
+            Glob::new(pattern)
+                .with_context(|| format!("invalid ignore glob {pattern:?} for {source:?}"))?,
+        );
+    }
+    builder
+        .build()
+        .with_context(|| format!("build ignore globs for {source:?}"))
+}
+
 /// If a file is given, it will return a map of one element
 /// Otherwise, returns recursively all the children and their targets
 /// in relation to parent target
-fn expand_directory(source: &Path, target: &FileTarget, config: &Configuration) -> Result<Files> {
+fn expand_directory(
+    source: &Path,
+    target: &FileTarget,
+    config: &Configuration,
+    ignore: &GlobSet,
+) -> Result<Files> {
     let metadata = fs::metadata(source).context("read file metadata")?;
 
     // if a target explicitly specifies a recurse option, this takes
@@ -551,6 +583,7 @@ fn expand_directory(source: &Path, target: &FileTarget, config: &Configuration) 
             owner: _,
             condition: _,
             recurse: Some(rec),
+            ..
         }) => *rec,
         _ => config.recurse,
     };
@@ -566,10 +599,17 @@ fn expand_directory(source: &Path, target: &FileTarget, config: &Configuration) 
             .context("read contents of directory")?
             .map(|child| -> Result<Files> {
                 let child = child?.file_name();
+                if ignore.is_match(Path::new(&child)) {
+                    trace!(
+                        "ignoring entry {:?} by configured glob",
+                        source.join(&child)
+                    );
+                    return Ok(Files::new());
+                }
                 let child_source = PathBuf::from(source).join(&child);
                 let mut child_target = target.clone();
                 child_target.set_path(child_target.path().join(&child));
-                expand_directory(&child_source, &child_target, config)
+                expand_directory(&child_source, &child_target, config, ignore)
                     .context(format!("expand file {child_source:?}"))
             })
             .collect::<Result<Vec<Files>>>()?; // Use transposition of Iterator<Result<T,E>> -> Result<Sequence<T>, E>

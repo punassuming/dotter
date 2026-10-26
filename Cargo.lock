@@ -503,6 +503,7 @@ dependencies = [
  "diff",
  "dunce",
  "evalexpr",
+ "globset",
  "handlebars",
  "handlebars_misc_helpers",
  "hostname",
